@@ -40,7 +40,7 @@
     runnerBg: loadImage("assets/rooms/forest-runner-loop-v2.png"),
     slashFx: loadImage("assets/sprites/ninja-slash-fx-v2.png"),
     runnerSlashFx: loadImage("assets/sprites/ninja-slash-fx-runner-v3.png"),
-    swordBoss: loadImage("assets/sprites/sword-boss-combat.png"),
+    swordBoss: loadImage("assets/sprites/sword-boss-combat-clean.png"),
     shurikenBoss: loadImage("assets/sprites/shuriken-boss-combat.png"),
     shurikenBossV2: loadImage("assets/sprites/shuriken-boss-combat-v2.png"),
     ninjutsuBoss: loadImage("assets/sprites/ninjutsu-boss-combat.png"),
