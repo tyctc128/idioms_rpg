@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>成語忍卷傳</title>
-    <link rel="stylesheet" href="style.css?v=41" />
+    <link rel="stylesheet" href="style.css?v=43" />
   </head>
   <body>
     <main class="game-shell" aria-label="成語忍卷傳">
@@ -68,21 +68,21 @@
 
         <nav class="touch-controls" aria-label="平板操作控制">
           <div class="dpad" aria-label="方向鍵">
-            <button data-dir="up" type="button" aria-label="上">▲</button>
-            <button data-dir="left" type="button" aria-label="左">◀</button>
-            <button data-dir="right" type="button" aria-label="右">▶</button>
-            <button data-dir="down" type="button" aria-label="下">▼</button>
+            <button class="control-icon dir-up" data-dir="up" type="button" aria-label="上"></button>
+            <button class="control-icon dir-left" data-dir="left" type="button" aria-label="左"></button>
+            <button class="control-icon dir-right" data-dir="right" type="button" aria-label="右"></button>
+            <button class="control-icon dir-down" data-dir="down" type="button" aria-label="下"></button>
           </div>
           <div class="action-pad">
-            <button id="backButton" class="touch-button small" type="button">B</button>
-            <button id="actionButton" class="touch-button primary" type="button">A</button>
+            <button id="backButton" class="touch-button small button-b" type="button" aria-label="返回"></button>
+            <button id="actionButton" class="touch-button primary button-a" type="button" aria-label="動作"></button>
           </div>
         </nav>
       </section>
     </main>
 
-    <script src="data/idioms.js?v=41"></script>
-    <script src="data/map.js?v=41"></script>
-    <script src="src/game.js?v=41"></script>
+    <script src="data/idioms.js?v=43"></script>
+    <script src="data/map.js?v=43"></script>
+    <script src="src/game.js?v=43"></script>
   </body>
 </html>
