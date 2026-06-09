@@ -33,7 +33,7 @@
     ninja: loadImage("assets/sprites/ninja-walk-v2.png"),
     props: loadImage("assets/props/scene-props.png"),
     boss: loadImage("assets/sprites/boss-runner-atlas.png"),
-    sumoBoss: loadImage("assets/sprites/sumo-boss-push.png"),
+    sumoBoss: loadImage("assets/sprites/sumo-boss-push-clean.png"),
     sumoPlayer: loadImage("assets/sprites/ninja-sumo-push.png"),
     sumoImpact: loadImage("assets/sprites/sumo-impact-fx.png"),
     sumoPushFx: loadImage("assets/sprites/sumo-push-fx-v2.png"),
@@ -42,10 +42,10 @@
     runnerSlashFx: loadImage("assets/sprites/ninja-slash-fx-runner-v3.png"),
     swordBoss: loadImage("assets/sprites/sword-boss-combat-clean.png"),
     shurikenBoss: loadImage("assets/sprites/shuriken-boss-combat.png"),
-    shurikenBossV2: loadImage("assets/sprites/shuriken-boss-combat-v2.png"),
-    ninjutsuBoss: loadImage("assets/sprites/ninjutsu-boss-combat.png"),
-    airBoss: loadImage("assets/sprites/air-boss-combat.png"),
-    finalBoss: loadImage("assets/sprites/final-boss-combat.png"),
+    shurikenBossV2: loadImage("assets/sprites/shuriken-boss-combat-v2-clean.png"),
+    ninjutsuBoss: loadImage("assets/sprites/ninjutsu-boss-combat-clean.png"),
+    airBoss: loadImage("assets/sprites/air-boss-combat-clean.png"),
+    finalBoss: loadImage("assets/sprites/final-boss-combat-clean.png"),
     ninjaCombat: loadImage("assets/sprites/ninja-combat-actions.png"),
     combatFx: loadImage("assets/sprites/combat-impact-fx.png"),
     shurikenFx: loadImage("assets/sprites/shuriken-fx-v2.png"),
@@ -137,6 +137,7 @@
   let flyingLoop = null;
   let currentMusic = null;
   let currentMusicKey = null;
+  let lastTouchEnd = 0;
   const activeSounds = new Set();
 
   flashDialogue(
@@ -148,8 +149,18 @@
   );
 
   summaryButton.addEventListener("click", closeSummary);
-  actionButton.addEventListener("click", interact);
-  backButton.addEventListener("click", handleBack);
+  actionButton.addEventListener("click", preventPageZoom);
+  backButton.addEventListener("click", preventPageZoom);
+  actionButton.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    unlockAudio();
+    interact();
+  });
+  backButton.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    unlockAudio();
+    handleBack();
+  });
   menuButton.addEventListener("click", showMission);
   audioToggleButton.addEventListener("click", toggleAudio);
   saveButton.addEventListener("click", saveGame);
@@ -187,6 +198,12 @@
   });
   window.addEventListener("pointerdown", unlockAudio, { once: true });
   window.addEventListener("keydown", unlockAudio, { once: true });
+  document.addEventListener("dblclick", preventPageZoom, { passive: false });
+  document.addEventListener("touchend", preventDoubleTapZoom, { passive: false });
+  document.addEventListener("touchmove", preventPinchZoom, { passive: false });
+  document.addEventListener("gesturestart", preventPageZoom, { passive: false });
+  document.addEventListener("gesturechange", preventPageZoom, { passive: false });
+  document.addEventListener("gestureend", preventPageZoom, { passive: false });
 
   const startupSave = readSavedGame();
   if (startupSave) showSavePrompt(startupSave);
@@ -201,6 +218,20 @@
     });
     image.src = src;
     return image;
+  }
+
+  function preventPageZoom(event) {
+    event.preventDefault();
+  }
+
+  function preventDoubleTapZoom(event) {
+    const now = Date.now();
+    if (now - lastTouchEnd <= 360) event.preventDefault();
+    lastTouchEnd = now;
+  }
+
+  function preventPinchZoom(event) {
+    if (event.touches && event.touches.length > 1) event.preventDefault();
   }
 
   function createSoundBank(files) {
