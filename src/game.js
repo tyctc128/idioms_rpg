@@ -960,7 +960,7 @@
         shot.done = true;
         battle.impactX = shot.x;
         battle.impactY = shot.y;
-        hitBoss("飛鏢命中 BOSS！");
+        hitBoss(shot.kind === "blowdart" ? "吹箭命中魔卷！" : "飛鏢命中 BOSS！");
         if (!state.battle) return;
       }
     }
@@ -1547,7 +1547,7 @@
       scenario: "飛鏢試煉：準星靠近中央時按 A，命中三次才算勝利。",
       judge: "忍術試煉：照提示方向擋招，能量滿時按 A 反擊。",
       runner: "空中試煉：上下飛行，與我同高度時按 A 斬擊。",
-      boss: "最終試煉：空中對決，抓準高度連續斬擊封印魔卷。"
+      boss: "最終試煉：忍者吹箭對決，抓準高度發射吹箭封印魔卷。"
     }[gateId] || "按 A 對戰，HP 歸零就要重新修行。";
   }
 
