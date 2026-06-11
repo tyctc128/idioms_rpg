@@ -8,6 +8,10 @@
 
 * {
   box-sizing: border-box;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 html,
@@ -206,6 +210,76 @@ button {
   margin: 0 0 16px;
   line-height: 1.65;
   font-size: clamp(17px, 2.6vw, 24px);
+}
+
+.summary-panel.celebration {
+  background:
+    radial-gradient(circle at 18% 22%, rgba(255, 221, 112, 0.22), transparent 18%),
+    radial-gradient(circle at 82% 18%, rgba(126, 221, 255, 0.2), transparent 20%),
+    rgba(8, 11, 9, 0.66);
+}
+
+.summary-panel.celebration .summary-card {
+  position: relative;
+  overflow: hidden;
+  text-align: center;
+  border-color: rgba(255, 225, 130, 0.82);
+  background: linear-gradient(180deg, rgba(70, 32, 18, 0.96), rgba(18, 22, 18, 0.94));
+}
+
+.summary-panel.celebration .summary-card::before {
+  content: "";
+  position: absolute;
+  inset: 16px 22px auto;
+  height: 16px;
+  border-radius: 999px;
+  background: repeating-linear-gradient(90deg, #f5d46f 0 34px, #c8362f 34px 68px, #2f8c7d 68px 102px);
+  box-shadow: 0 9px 18px rgba(0, 0, 0, 0.26);
+}
+
+.summary-panel.celebration .summary-card::after {
+  content: "";
+  position: absolute;
+  inset: 52px 30px auto;
+  height: 66px;
+  pointer-events: none;
+  background:
+    radial-gradient(circle, #ffd86b 0 4px, transparent 5px) 0 4px / 82px 34px,
+    radial-gradient(circle, #86e0ff 0 4px, transparent 5px) 28px 0 / 86px 38px,
+    radial-gradient(circle, #ff8f79 0 4px, transparent 5px) 50px 18px / 90px 42px;
+  opacity: 0.85;
+}
+
+.summary-panel.celebration .summary-card h2 {
+  margin-top: 64px;
+  color: #ffe28c;
+  font-size: clamp(42px, 8vw, 82px);
+  text-shadow: 0 4px 0 rgba(78, 30, 12, 0.85), 0 0 22px rgba(255, 221, 112, 0.45);
+}
+
+.summary-panel.celebration .summary-card p {
+  color: #fff4ce;
+  font-weight: 800;
+}
+
+.summary-panel.hidden-victory .summary-card {
+  min-height: min(520px, 70vh);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.08), rgba(12, 15, 13, 0.82) 72%),
+    url("assets/map/hidden-stage-success.png") center / cover;
+}
+
+.summary-panel.hidden-victory .summary-card::before,
+.summary-panel.hidden-victory .summary-card::after {
+  content: none;
+}
+
+.summary-panel.hidden-victory .summary-card h2 {
+  margin-top: auto;
+  font-size: clamp(32px, 6vw, 64px);
 }
 
 .save-actions {

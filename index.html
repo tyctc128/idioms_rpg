@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover" />
     <title>成語忍卷傳</title>
-    <link rel="stylesheet" href="style.css?v=46" />
+    <link rel="stylesheet" href="style.css?v=63" />
   </head>
   <body>
     <main class="game-shell" aria-label="成語忍卷傳">
@@ -66,6 +66,17 @@
           </div>
         </section>
 
+        <section id="hiddenPrompt" class="summary-panel hidden" aria-live="polite">
+          <div class="summary-card">
+            <h2>隱藏關卡出現</h2>
+            <p>要挑戰天狗階梯嗎？</p>
+            <div class="save-actions">
+              <button id="startHiddenButton" type="button">開始挑戰</button>
+              <button id="skipHiddenButton" class="secondary" type="button">稍後再說</button>
+            </div>
+          </div>
+        </section>
+
         <nav class="touch-controls" aria-label="平板操作控制">
           <div class="dpad" aria-label="方向鍵">
             <button class="control-icon dir-up" data-dir="up" type="button" aria-label="上"></button>
@@ -81,8 +92,8 @@
       </section>
     </main>
 
-    <script src="data/idioms.js?v=46"></script>
-    <script src="data/map.js?v=46"></script>
-    <script src="src/game.js?v=46"></script>
+    <script src="data/idioms.js?v=63"></script>
+    <script src="data/map.js?v=63"></script>
+    <script src="src/game.js?v=63"></script>
   </body>
 </html>

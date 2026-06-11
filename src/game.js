@@ -1,4 +1,4 @@
-(function () {
+﻿(function () {
   const canvas = document.getElementById("gameCanvas");
   const ctx = canvas.getContext("2d");
   const hudArea = document.getElementById("areaName");
@@ -26,6 +26,9 @@
   const savePrompt = document.getElementById("savePrompt");
   const loadSaveButton = document.getElementById("loadSaveButton");
   const newGameButton = document.getElementById("newGameButton");
+  const hiddenPrompt = document.getElementById("hiddenPrompt");
+  const startHiddenButton = document.getElementById("startHiddenButton");
+  const skipHiddenButton = document.getElementById("skipHiddenButton");
 
   const assets = {
     hub: loadImage("assets/map/idiom-village-map.png"),
@@ -49,7 +52,11 @@
     ninjaCombat: loadImage("assets/sprites/ninja-combat-actions.png"),
     combatFx: loadImage("assets/sprites/combat-impact-fx.png"),
     shurikenFx: loadImage("assets/sprites/shuriken-fx-v2.png"),
-    blowDart: loadImage("assets/sprites/ninja-blowdart-fx.png")
+    blowDart: loadImage("assets/sprites/ninja-blowdart-fx.png"),
+    ninjaClimb: loadImage("assets/sprites/ninja-climb.png"),
+    hiddenBg: loadImage("assets/map/hidden-stage-bg.png"),
+    hiddenSheet: loadImage("assets/sprites/hidden-stage-sheet.png"),
+    hiddenSuccess: loadImage("assets/map/hidden-stage-success.png")
   };
 
   const sounds = createSoundBank({
@@ -71,7 +78,8 @@
     shuriken: "shuriken_throw.mp3",
     fireball: "fireball.mp3",
     flying: "flying_loop.mp3",
-    blowDart: "blow_dart.mp3"
+    blowDart: "blow_dart.mp3",
+    cheer: "歡呼聲.mp3"
   });
 
   const music = createMusicBank({
@@ -97,6 +105,7 @@
   const SAVE_KEY = "idioms-rpg-save-v1";
   const RUNNER_SLASH_TIME = 0.32;
   const RUNNER_SLASH_DELAY = 0.12;
+  const HIDDEN_EDGE_INSET = 16;
   const keys = new Set();
   const touchTimers = new Map();
 
@@ -114,12 +123,16 @@
     cleared: new Set(),
     completedObjects: new Set(),
     roomProgress: Object.fromEntries(MAP_DATA.exits.map((gate) => [gate.room, { training: 0, boss: 0 }])),
+    ambushGates: createAmbushGates(),
     deck: shuffle([...IDIOMS.keys()]),
     currentGate: null,
     currentRoom: null,
     currentObject: null,
     pending: null,
     gameComplete: false,
+    hiddenPrompted: false,
+    hiddenCleared: false,
+    hidden: null,
     runner: null,
     tapMove: { dx: 0, dy: 0, time: 0 },
     battle: null
@@ -167,6 +180,8 @@
   resetButton.addEventListener("click", resetSavedGame);
   loadSaveButton.addEventListener("click", loadSavedGame);
   newGameButton.addEventListener("click", startFreshGame);
+  startHiddenButton.addEventListener("click", startHiddenStage);
+  skipHiddenButton.addEventListener("click", hideHiddenPrompt);
 
   document.querySelectorAll("[data-dir]").forEach((button) => {
     const key = "Arrow" + button.dataset.dir[0].toUpperCase() + button.dataset.dir.slice(1);
@@ -204,9 +219,16 @@
   document.addEventListener("gesturestart", preventPageZoom, { passive: false });
   document.addEventListener("gesturechange", preventPageZoom, { passive: false });
   document.addEventListener("gestureend", preventPageZoom, { passive: false });
+  document.addEventListener("contextmenu", preventPageZoom, { passive: false });
+  document.addEventListener("selectstart", preventPageZoom, { passive: false });
 
   const startupSave = readSavedGame();
-  if (startupSave) showSavePrompt(startupSave);
+  if (isHiddenTestMode()) {
+    state.gameComplete = true;
+    state.hiddenPrompted = true;
+    startHiddenStage();
+    window.__state = state; // 測試模式專用：供自動化測試讀取狀態
+  } else if (startupSave) showSavePrompt(startupSave);
 
   setInterval(() => tick(performance.now()), 1000 / 60);
 
@@ -218,6 +240,10 @@
     });
     image.src = src;
     return image;
+  }
+
+  function isHiddenTestMode() {
+    return new URLSearchParams(window.location.search).has("hidden");
   }
 
   function preventPageZoom(event) {
@@ -285,6 +311,18 @@
     playSound(names[Math.floor(Math.random() * names.length)], volume);
   }
 
+  function playFinalCheer() {
+    const musicToRestore = currentMusic;
+    const originalVolume = musicToRestore?.volume;
+    if (musicToRestore) musicToRestore.volume = Math.min(originalVolume ?? 0.34, 0.1);
+    setTimeout(() => playSound("cheer", 1), 260);
+    if (musicToRestore && originalVolume != null) {
+      setTimeout(() => {
+        if (musicToRestore) musicToRestore.volume = originalVolume;
+      }, 4200);
+    }
+  }
+
   function startLoop(name, currentLoop, volume = null) {
     if (!audioEnabled || !audioUnlocked) return currentLoop;
     if (currentLoop) return currentLoop;
@@ -338,6 +376,7 @@
   }
 
   function currentMusicTarget() {
+    if (state.place === "hidden" && state.hidden?.musicKey) return state.hidden.musicKey;
     if (state.place === "room" && state.currentGate?.id) return state.currentGate.id;
     return "main";
   }
@@ -416,6 +455,7 @@
 
   function update(dt) {
     if (state.mode === "battle") return updateBattle(dt);
+    if (state.mode === "hidden") return updateHiddenStage(dt);
     if (state.mode !== "map" && state.mode !== "room") return;
     if (state.place === "room" && state.currentRoom?.mode === "runner") updateRunner(dt);
     else updateTopdown(dt);
@@ -511,7 +551,419 @@
     });
   }
 
+  function createHiddenStage() {
+    return {
+      time: 0,
+      hp: 5,
+      maxHp: 5,
+      correct: 0,
+      required: 5,
+      player: { x: 180, y: 787, vx: 0, vy: 0, level: 0, grounded: true, jumping: false, climbing: false, ladderIndex: -1, climbLock: 0, invul: 0, slash: 0 },
+      boss: { x: 950, y: 134, vx: 82, hp: 8, maxHp: 8, battle: false, attack: 0, hitFlash: 0 },
+      fireballs: [],
+      tengu: [],
+      scrolls: [],
+      fireTimer: 1.8,
+      tenguTimer: 3.2,
+      scrollTimer: 2.4,
+      message: "靠梯子與轉角石階上下層，奪回書卷。",
+      musicKey: shuffle(["meaning", "cloze", "scenario", "judge", "runner", "boss"])[0],
+      failed: false
+    };
+  }
+
+  // 每層為折線地形 [x, y]，依背景圖路面前緣校準；段間斜坡即美術裡的小階梯
+  function hiddenPlatforms() {
+    return [
+      { level: 0, profile: [[62, 790], [330, 783], [1010, 777], [1310, 792], [1440, 792]] },
+      { level: 1, profile: [[340, 611], [1340, 611]] },
+      { level: 2, profile: [[425, 489], [1105, 494], [1150, 559], [1284, 559]] },
+      { level: 3, profile: [[252, 455], [455, 455], [518, 392], [1060, 390]] },
+      { level: 4, profile: [[282, 296], [550, 288], [1095, 292], [1130, 335], [1334, 335]] },
+      { level: 5, profile: [[440, 196], [1140, 194], [1168, 220], [1276, 220]] },
+      { level: 6, profile: [[520, 151], [1140, 151]] }
+    ];
+  }
+
+  function hiddenSurfaceY(platform, x) {
+    const profile = platform.profile;
+    if (x <= profile[0][0]) return profile[0][1];
+    for (let i = 1; i < profile.length; i++) {
+      const [x1, y1] = profile[i - 1];
+      const [x2, y2] = profile[i];
+      if (x <= x2) return y1 + ((y2 - y1) * (x - x1)) / (x2 - x1);
+    }
+    return profile[profile.length - 1][1];
+  }
+
+  function hiddenLadders() {
+    const platforms = hiddenPlatforms();
+    const byLevel = (level) => platforms.find((platform) => platform.level === level);
+    return [
+      { x: 782, from: 0, to: 1 },
+      { x: 690, from: 1, to: 2 },
+      { x: 804, from: 2, to: 3 },
+      { x: 718, from: 3, to: 4 },
+      { x: 703, from: 4, to: 5 },
+      { x: 932, from: 5, to: 6 },
+      // 轉角石階：左角燈籠台↔L2、右角圓台↔L1（畫在背景圖上的小階梯）
+      { x: 440, from: 2, to: 3 },
+      { x: 1145, from: 1, to: 2 }
+    ].map((ladder) => ({
+      ...ladder,
+      yBottom: hiddenSurfaceY(byLevel(ladder.from), ladder.x),
+      yTop: hiddenSurfaceY(byLevel(ladder.to), ladder.x)
+    }));
+  }
+
+  function currentHiddenLadder(hidden, player, up, down) {
+    const ladders = hiddenLadders();
+    if (player.climbing && player.ladderIndex >= 0) return ladders[player.ladderIndex] || null;
+    return ladders.find((ladder, index) => {
+      const aligned = Math.abs(player.x - ladder.x) <= 24;
+      const canGoUp = up && player.level === ladder.from && player.grounded;
+      const canGoDown = down && player.level === ladder.to && player.grounded;
+      if (aligned && canGoUp && ladder.to === 6 && hidden.correct < hidden.required) {
+        hidden.message = `至少答對 ${hidden.required} 題，才能登上最上層。`;
+        return false;
+      }
+      if (aligned && (canGoUp || canGoDown)) {
+        player.ladderIndex = index;
+        return true;
+      }
+      return false;
+    });
+  }
+
+  function hiddenPlatformByLevel(level) {
+    return hiddenPlatforms().find((platform) => platform.level === level) || hiddenPlatforms()[0];
+  }
+
+  function hiddenWalkableRange(platform) {
+    const profile = platform.profile;
+    return { min: profile[0][0] + HIDDEN_EDGE_INSET, max: profile[profile.length - 1][0] - HIDDEN_EDGE_INSET };
+  }
+
+  function updateHiddenStage(dt) {
+    const hidden = state.hidden;
+    if (!hidden || hidden.failed) return;
+    hidden.time += dt;
+    const player = hidden.player;
+    if (player.invul > 0) player.invul -= dt;
+    if (player.slash > 0) player.slash -= dt;
+    if (player.climbLock > 0) player.climbLock -= dt;
+
+    const left = keys.has("ArrowLeft");
+    const right = keys.has("ArrowRight");
+    const up = keys.has("ArrowUp");
+    const down = keys.has("ArrowDown");
+    const ladder = currentHiddenLadder(hidden, player, up, down);
+    if (!player.climbing && ladder) {
+      player.climbing = true;
+      player.x = ladder.x;
+      player.y = up ? ladder.yBottom : ladder.yTop;
+      player.vx = 0;
+      player.vy = 0;
+      player.grounded = false;
+      player.jumping = false;
+    }
+    player.vx = (right ? 1 : 0) * 235 - (left ? 1 : 0) * 235;
+    if (left || right) {
+      state.dir = right ? "right" : "left";
+      state.frame += dt * 12;
+    }
+    state.moving = left || right || player.climbing;
+    if (player.climbing && ladder) {
+      player.x = ladder.x;
+      player.vy = 0;
+      if (up) player.y -= 225 * dt;
+      if (down) player.y += 225 * dt;
+      if (up || down) state.frame += dt * 8;
+      player.y = clamp(player.y, ladder.yTop, ladder.yBottom);
+      player.grounded = false;
+      if ((up && player.y <= ladder.yTop) || (down && player.y >= ladder.yBottom)) {
+        player.y = up ? ladder.yTop : ladder.yBottom;
+        player.vy = 0;
+        player.grounded = true;
+        player.jumping = false;
+        player.level = up ? ladder.to : ladder.from;
+        player.climbing = false;
+        player.ladderIndex = -1;
+        player.climbLock = 0.18;
+      } else if (!up && !down) {
+        state.frame += dt * 4;
+      }
+    } else {
+      // 設計上樓層只能靠梯子移動，行走範圍鎖在所在平台內
+      const floor = hiddenPlatformByLevel(player.level);
+      const range = hiddenWalkableRange(floor);
+      player.x = clamp(player.x + player.vx * dt, range.min, range.max);
+      const floorY = hiddenSurfaceY(floor, player.x);
+
+      if (up && player.grounded && player.climbLock <= 0) {
+        player.vy = -430;
+        player.grounded = false;
+        player.jumping = true;
+      }
+
+      if (player.grounded) {
+        player.y = floorY;
+        player.vy = 0;
+      } else {
+        player.vy += 1900 * dt;
+        player.y += player.vy * dt;
+
+        if (player.vy >= 0 && player.y >= floorY) {
+          player.y = floorY;
+          player.vy = 0;
+          player.grounded = true;
+          player.jumping = false;
+        }
+      }
+    }
+
+    if (player.y > 850) resetHiddenAttempt("失血過多，回到起點重新挑戰。");
+
+    if (hidden.correct < hidden.required && player.level >= 6) {
+      const fallback = hiddenPlatformByLevel(5);
+      player.level = 5;
+      player.x = clamp(player.x, hiddenWalkableRange(fallback).min, hiddenWalkableRange(fallback).max);
+      player.y = hiddenSurfaceY(fallback, player.x);
+      player.vy = 0;
+      player.grounded = true;
+      player.jumping = false;
+      hidden.message = `至少答對 ${hidden.required} 題，才能登上最上層。`;
+    }
+    updateHiddenBoss(dt, hidden);
+    updateHiddenObjects(dt, hidden);
+    maybeStartHiddenBossBattle(hidden);
+  }
+
+  function updateHiddenBoss(dt, hidden) {
+    const boss = hidden.boss;
+    boss.x += boss.vx * dt;
+    if (boss.x < 610 || boss.x > 1090) boss.vx *= -1;
+    if (boss.attack > 0) boss.attack -= dt;
+    if (boss.hitFlash > 0) boss.hitFlash -= dt;
+
+    hidden.fireTimer -= dt;
+    if (hidden.fireTimer <= 0) {
+      spawnHiddenFireball(hidden);
+      hidden.fireTimer = boss.battle ? 1.15 : 1.85 + Math.random() * 0.75;
+    }
+
+    hidden.tenguTimer -= dt;
+    if (hidden.tenguTimer <= 0) {
+      spawnHiddenTengu(hidden);
+      hidden.tenguTimer = boss.battle ? 2.4 : 3.6 + Math.random() * 1.1;
+    }
+
+    hidden.scrollTimer -= dt;
+    if (!boss.battle && hidden.scrollTimer <= 0 && hidden.correct < hidden.required) {
+      spawnHiddenScroll(hidden);
+      hidden.scrollTimer = 4.4 + Math.random() * 1.2;
+    }
+  }
+
+  function updateHiddenObjects(dt, hidden) {
+    const player = hidden.player;
+    for (const fireball of hidden.fireballs) {
+      fireball.x += fireball.vx * dt;
+      fireball.y += fireball.vy * dt;
+      fireball.life -= dt;
+      fireball.spin += dt * 8;
+      if (distance(player.x, player.y - 44, fireball.x, fireball.y) < 50) {
+        fireball.life = 0;
+        damageHidden("被火球擊中，HP -1。");
+      }
+    }
+    hidden.fireballs = hidden.fireballs.filter((item) => item.life > 0 && item.x > -120 && item.x < 1650 && item.y > 70 && item.y < 850);
+
+    for (const enemy of hidden.tengu) {
+      enemy.x += enemy.vx * dt;
+      enemy.y += Math.sin(hidden.time * 5 + enemy.wave) * 45 * dt;
+      enemy.life -= dt;
+      if (distance(player.x, player.y - 48, enemy.x, enemy.y) < 58) {
+        enemy.life = 0;
+        damageHidden("撞到小天狗，HP -1。");
+      }
+    }
+    hidden.tengu = hidden.tengu.filter((item) => item.life > 0 && item.x > -140 && item.x < 1660);
+
+    for (const scroll of hidden.scrolls) {
+      if (!scroll.landed) {
+        scroll.y += scroll.vy * dt;
+        if (scroll.y >= scroll.targetY) {
+          scroll.y = scroll.targetY;
+          scroll.landed = true;
+        }
+      }
+      scroll.life -= dt;
+    }
+    hidden.scrolls = hidden.scrolls.filter((item) => !item.done && item.life > 0);
+  }
+
+  function spawnHiddenFireball(hidden) {
+    const boss = hidden.boss;
+    boss.attack = 0.45;
+    playSound("fireball", 0.86);
+    const targetY = hidden.player.grounded ? hidden.player.y - 42 : hidden.player.y - 16;
+    const dx = hidden.player.x - boss.x;
+    const dy = targetY - (boss.y + 52);
+    const len = Math.hypot(dx, dy) || 1;
+    hidden.fireballs.push({
+      x: boss.x - 34,
+      y: boss.y + 52,
+      vx: (dx / len) * 330,
+      vy: (dy / len) * 330,
+      r: 24,
+      life: 5,
+      spin: 0
+    });
+  }
+
+  function spawnHiddenTengu(hidden) {
+    const direction = hidden.player.x < hidden.boss.x ? -1 : 1;
+    hidden.tengu.push({
+      x: hidden.boss.x + direction * 20,
+      y: clamp(hidden.player.y - 82, 180, 700),
+      vx: direction * (190 + Math.random() * 60),
+      wave: Math.random() * Math.PI * 2,
+      life: 7
+    });
+  }
+
+  function spawnHiddenScroll(hidden) {
+    const platform = hiddenPlatformByLevel(hidden.player.level);
+    const range = hiddenWalkableRange(platform);
+    const x = clamp(hidden.player.x + (Math.random() < 0.5 ? 160 : -160), range.min + 54, range.max - 54);
+    hidden.scrolls.push({
+      x,
+      y: 120,
+      targetY: hiddenSurfaceY(platform, x) - 34,
+      vy: 250,
+      landed: false,
+      life: 14,
+      done: false
+    });
+  }
+
+  function hiddenSlash() {
+    const hidden = state.hidden;
+    if (!hidden || hidden.player.slash > 0) return;
+    const player = hidden.player;
+    player.slash = 0.28;
+    playSound("runnerSlash", 0.9);
+    const sx = player.x + (state.dir === "left" ? -92 : 92);
+    const sy = player.y - 56;
+
+    for (const enemy of hidden.tengu) {
+      if (distance(sx, sy, enemy.x, enemy.y) < 115) {
+        enemy.life = 0;
+        hidden.message = "斬退小天狗！";
+        playSound("swordClash", 0.82);
+      }
+    }
+
+    const scroll = hidden.scrolls.find((item) => item.landed && distance(sx, sy, item.x, item.y) < 118);
+    if (scroll) {
+      scroll.done = true;
+      playSound("question", 0.86);
+      return startHiddenQuestion();
+    }
+
+    if (hidden.boss.battle && distance(sx, sy, hidden.boss.x, hidden.boss.y + 68) < 145) {
+      hidden.boss.hp -= 1;
+      hidden.boss.hitFlash = 0.32;
+      hidden.message = `命中大天狗！BOSS HP ${hidden.boss.hp}/${hidden.boss.maxHp}`;
+      playSound("swordClash", 0.92);
+      if (hidden.boss.hp <= 0) return winHiddenStage();
+    }
+  }
+
+  function maybeStartHiddenBossBattle(hidden) {
+    if (hidden.boss.battle || hidden.correct < hidden.required) return;
+    if (hidden.player.y <= 170 && Math.abs(hidden.player.x - hidden.boss.x) < 340) {
+      hidden.boss.battle = true;
+      hidden.message = "大 BOSS 決戰！靠近揮刀攻擊。";
+      hidden.fireTimer = 0.8;
+      hidden.tenguTimer = 1.6;
+    }
+  }
+
+  function damageHidden(message) {
+    const hidden = state.hidden;
+    if (!hidden || hidden.player.invul > 0) return;
+    playSound("hit", 0.9);
+    hidden.hp -= 1;
+    hidden.player.invul = 1.1;
+    hidden.message = message;
+    if (hidden.hp <= 0) resetHiddenAttempt("失血太多，回到起點重新挑戰。");
+  }
+
+  function resetHiddenAttempt(message) {
+    if (!state.hidden || state.hidden.failed) return;
+    state.hidden.failed = true;
+    flashDialogue(message, "重新挑戰", () => {
+      state.hidden = createHiddenStage();
+      state.mode = "hidden";
+      state.place = "hidden";
+    });
+  }
+
+  function startHiddenQuestion() {
+    state.mode = "hiddenQuestion";
+    state.pending = buildQuestion(randomBossType());
+    questionMeta.textContent = `天狗階梯 | 書卷題 | ${labelForType(state.pending.type)}`;
+    questionTitle.textContent = state.pending.title;
+    questionText.textContent = state.pending.text;
+    feedback.textContent = "";
+    choiceList.innerHTML = "";
+    for (const choice of state.pending.choices) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = choice;
+      button.addEventListener("click", () => answerQuestion(choice));
+      choiceList.appendChild(button);
+    }
+    questionPanel.classList.remove("hidden");
+  }
+
+  function answerHiddenQuestion(choice) {
+    const hidden = state.hidden;
+    const ok = choice === state.pending.answer;
+    if (!ok) {
+      playSound("wrong", 0.9);
+      damageHidden("書卷答錯，HP -1。");
+      feedback.textContent = "答錯了，再找下一個書卷。";
+      setTimeout(() => {
+        questionPanel.classList.add("hidden");
+        state.mode = "hidden";
+      }, 650);
+      return;
+    }
+    playSound("correct", 0.9);
+    hidden.correct = Math.min(hidden.required, hidden.correct + 1);
+    state.marks.add(state.pending.idiom.idiom);
+    feedback.textContent = `答對了：${state.pending.idiom.idiom}。${state.pending.idiom.meaning}`;
+    hidden.message = hidden.correct >= hidden.required ? "五道書卷已完成，登上最上層挑戰大 BOSS！" : `書卷 ${hidden.correct}/${hidden.required}`;
+    updateHud();
+    setTimeout(() => {
+      questionPanel.classList.add("hidden");
+      state.mode = "hidden";
+    }, 850);
+  }
+
+  function winHiddenStage() {
+    state.hiddenCleared = true;
+    state.mode = "summary";
+    playFinalCheer();
+    showSummary("挑戰成功", "天狗階梯已突破，隱藏修行完成。", true);
+    summaryPanel.classList.add("hidden-victory");
+  }
+
   function stepByTouch(dir) {
+    if (state.mode === "hidden") return;
     if (state.mode !== "map" && state.mode !== "room") return;
     if (state.place === "room" && state.currentRoom?.mode === "runner") {
       if (dir === "up") state.y = clamp(state.y - 48, 135, 710);
@@ -560,7 +1012,8 @@
       updateHud();
       return;
     }
-    if (state.place === "room" && state.currentRoom) drawRoom();
+    if (state.place === "hidden" && state.hidden) drawHiddenStage();
+    else if (state.place === "room" && state.currentRoom) drawRoom();
     else drawHub();
     if (state.mode === "battle") drawBattle();
     updateHud();
@@ -747,6 +1200,7 @@
       pushWave: 0,
       hazards: [],
       playerShots: [],
+      smallBoss: createSmallBoss(kind, profile),
       step: 0,
       message: battleRuleText(state.currentGate.id),
       flash: 0
@@ -779,6 +1233,7 @@
 
     updateBattlePlayer(dt, battle);
     updateBossAi(dt, battle);
+    updateSmallBoss(dt, battle);
     updateBattleHazards(dt, battle);
     updatePlayerShots(dt, battle);
 
@@ -881,8 +1336,8 @@
 
     if ((battle.kind === "shuriken" || battle.kind === "ninjutsu" || battle.kind === "air" || battle.kind === "final") && battle.bossCooldown <= 0) {
       battle.bossAttack = profile?.bossAttackTime || 0.36;
-      spawnBossHazard(battle, nx, ny);
-      battle.bossCooldown = profile?.cooldown || (battle.kind === "final" ? 0.85 : 1.15);
+      spawnBossVolley(battle, battle.bossX, battle.bossY, nx, ny, false);
+      battle.bossCooldown = (profile?.cooldown || (battle.kind === "final" ? 0.85 : 1.15)) + 0.25;
       battle.message = "BOSS 出招，快閃避！";
       return;
     }
@@ -901,17 +1356,99 @@
     return battle.kind === "sumo" ? 48 : combatProfiles[battle.kind]?.speed || 210;
   }
 
-  function spawnBossHazard(battle, nx, ny) {
+  function createSmallBoss(kind, profile) {
+    if (!state.ambushGates.has(state.currentGate.id)) return null;
+    return {
+      active: false,
+      entered: false,
+      x: 1380,
+      y: kind === "air" || kind === "final" ? 360 : 520,
+      scale: (profile?.bossScale || 0.42) * 0.56,
+      cooldown: 1.15 + Math.random() * 0.75,
+      attack: 0,
+      hitFlash: 0,
+      step: Math.random() * 10
+    };
+  }
+
+  function updateSmallBoss(dt, battle) {
+    const small = battle.smallBoss;
+    if (!small) return;
+    if (!small.active) {
+      if (!small.entered && battle.bossHp < battle.maxBossHp / 2) {
+        small.active = true;
+        small.entered = true;
+        small.x = battle.playerX < battle.bossX ? 1320 : 220;
+        small.y = clamp(battle.playerY + (Math.random() < 0.5 ? -120 : 120), 310, 620);
+      }
+      return;
+    }
+
+    small.step += dt;
+    if (small.attack > 0) small.attack -= dt;
+    if (small.hitFlash > 0) small.hitFlash -= dt;
+    const dx = battle.playerX - small.x;
+    const dy = battle.playerY - small.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    const nx = dx / dist;
+    const ny = dy / dist;
+    const ranged = battle.kind === "shuriken" || battle.kind === "ninjutsu" || battle.kind === "air" || battle.kind === "final";
+    const speed = (bossSpeed(battle) + 40) * (ranged ? 0.72 : 0.86);
+
+    if (ranged) {
+      const keepAway = dist < 330 ? -0.8 : 0.36;
+      small.x += nx * speed * keepAway * dt;
+      small.y += (ny * speed * keepAway + Math.sin(small.step * 4.2) * 95) * dt;
+    } else {
+      small.x += nx * speed * dt;
+      small.y += ny * speed * 0.72 * dt;
+    }
+
+    small.x = clamp(small.x, 250, 1285);
+    small.y = clamp(small.y, 300, 630);
+    small.cooldown -= dt;
+
+    if (ranged && small.cooldown <= 0) {
+      small.attack = combatProfiles[battle.kind]?.bossAttackTime || 0.34;
+      spawnBossVolley(battle, small.x, small.y, nx, ny, true);
+      small.cooldown = 2.0 + Math.random() * 0.8;
+      return;
+    }
+
+    const bodyRange = battle.kind === "sumo" ? 116 : 98;
+    if (!ranged && dist < bodyRange && small.cooldown <= 0) {
+      small.attack = battle.kind === "sumo" ? 0.42 : combatProfiles[battle.kind]?.bossAttackTime || 0.32;
+      damageBattle("被夾擊命中！", small.x, small.y - 20);
+      battle.playerX = clamp(battle.playerX + nx * 72, 290, 1240);
+      battle.playerY = clamp(battle.playerY + ny * 48, 300, 640);
+      small.cooldown = 2.25 + Math.random() * 0.65;
+    }
+  }
+
+  function spawnBossVolley(battle, x, y, nx, ny, small = false) {
     playBossHazardSound(battle.kind);
+    const baseCount = { shuriken: 4, ninjutsu: 3, air: 3, final: 4 }[battle.kind] || 2;
+    const count = small ? Math.max(2, baseCount - 1) : baseCount + (Math.random() < 0.35 ? 1 : 0);
+    const spread = { shuriken: 0.44, ninjutsu: 0.34, air: 0.42, final: 0.3 }[battle.kind] || 0.32;
+    for (let i = 0; i < count; i++) {
+      const center = (count - 1) / 2;
+      const angle = (i - center) * spread + (Math.random() - 0.5) * 0.08;
+      const dir = rotateVector(nx, ny, angle);
+      const offset = (i - center) * (battle.kind === "ninjutsu" ? 26 : 20);
+      spawnBossHazard(battle, x - ny * offset, y + nx * offset, dir.x, dir.y, small);
+    }
+  }
+
+  function spawnBossHazard(battle, x, y, nx, ny, small = false) {
     const speed = { shuriken: 230, ninjutsu: 210, air: 245, final: 330 }[battle.kind] || 240;
     const radius = { shuriken: 18, ninjutsu: 28, air: 24, final: 18 }[battle.kind] || 24;
     battle.hazards.push({
-      x: battle.bossX + nx * 54,
-      y: battle.bossY + ny * 54,
-      vx: nx * speed,
-      vy: ny * speed,
+      x: x + nx * (small ? 44 : 54),
+      y: y + ny * (small ? 44 : 54),
+      vx: nx * (speed + (small ? 10 : 0)),
+      vy: ny * (speed + (small ? 10 : 0)),
       r: radius,
-      life: battle.kind === "shuriken" ? 4.2 : battle.kind === "final" ? 3.2 : 2.1,
+      life: battle.kind === "shuriken" ? 4.2 : battle.kind === "final" ? 3.2 : 2.2,
       kind: battle.kind,
       spin: Math.random() * Math.PI * 2
     });
@@ -1015,7 +1552,8 @@
   }
 
   function winBattle() {
-    playRandomSound(["victory1", "victory2"], 0.9);
+    const finalClear = state.currentGate?.id === "boss";
+    if (!finalClear) playRandomSound(["victory1", "victory2"], 0.9);
     const progress = state.roomProgress[roomId()];
     progress.boss = state.currentRoom.bossQuestions;
     state.mode = "room";
@@ -1104,6 +1642,7 @@
       );
       ctx.globalAlpha = 1;
     }
+    drawSmallBoss(battle);
 
     if (battle.playerAttack > 0) {
       const slash = attackPoint(battle);
@@ -1260,6 +1799,50 @@
     ctx.globalCompositeOperation = "lighter";
     ctx.globalAlpha = 0.92;
     drawSpriteSheetFrame(assets.sumoImpact, 2, 2, frame, x, y, scale, false);
+    ctx.restore();
+  }
+
+  function drawSmallBoss(battle) {
+    const small = battle.smallBoss;
+    if (!small?.active) return;
+    const profile = combatProfiles[battle.kind];
+    const bossOnRight = small.x >= battle.playerX;
+    const attackTime = battle.kind === "sumo" ? 0.42 : profile?.bossAttackTime || 0.34;
+    const attackPush = small.attack > 0 ? (1 - clamp(small.attack / attackTime, 0, 1)) * 18 : 0;
+
+    drawPressureShadow(small.x, small.y, small.scale * 0.72);
+    if (small.attack > 0) drawBossShockwave(small.x, small.y, small.attack);
+
+    ctx.save();
+    ctx.globalAlpha = 0.92;
+    if (small.hitFlash > 0) ctx.filter = "brightness(1.8)";
+    if (battle.kind === "sumo") {
+      const frame = small.attack > 0 ? Math.min(3, Math.floor((1 - clamp(small.attack / attackTime, 0, 1)) * 4)) : Math.floor(small.step * 5) % 2;
+      drawSpriteSheetFrame(
+        assets.sumoBoss,
+        4,
+        1,
+        frame,
+        small.x + (bossOnRight ? -attackPush : attackPush),
+        small.y - 12,
+        small.scale,
+        !bossOnRight
+      );
+    } else if (profile) {
+      const frame = small.attack > 0 ? Math.min(3, Math.floor((1 - clamp(small.attack / attackTime, 0, 1)) * 4)) : Math.floor(small.step * 3) % 2;
+      drawSpriteSheetFrame(
+        assets[profile.bossAsset],
+        4,
+        1,
+        frame,
+        small.x + (bossOnRight ? -attackPush : attackPush),
+        small.y - (battle.kind === "final" ? 8 : 6),
+        small.scale,
+        !bossOnRight
+      );
+    } else {
+      drawBossCell(state.currentRoom.bossCell, small.x, small.y, small.scale);
+    }
     ctx.restore();
   }
 
@@ -1593,6 +2176,132 @@
     ctx.restore();
   }
 
+  function drawHiddenStage() {
+    const hidden = state.hidden;
+    if (!hidden) return;
+    ctx.drawImage(assets.hiddenBg, 0, 0, canvas.width, canvas.height);
+    drawHiddenPlatformGuides(hidden);
+    drawHiddenBoss(hidden);
+    drawHiddenObjects(hidden);
+    drawHiddenPlayer(hidden);
+    drawHiddenHud(hidden);
+  }
+
+  function drawHiddenPlatformGuides(hidden) {
+    ctx.save();
+    if (hidden.correct < hidden.required) {
+      ctx.strokeStyle = "rgba(255, 92, 72, .72)";
+      ctx.lineWidth = 5;
+      ctx.setLineDash([12, 10]);
+      ctx.beginPath();
+      ctx.moveTo(460, 174);
+      ctx.lineTo(1150, 174);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.restore();
+  }
+
+  function drawHiddenBoss(hidden) {
+    const boss = hidden.boss;
+    ctx.save();
+    if (boss.hitFlash > 0) ctx.filter = "brightness(1.8)";
+    drawHiddenCell(0, boss.x, boss.y + 82 + Math.sin(hidden.time * 2) * 5, 440, 330, true);
+    ctx.restore();
+    if (boss.battle) {
+      drawBar(610, 188, 350, 24, boss.hp / boss.maxHp, "#ff7777", `大天狗 ${boss.hp}/${boss.maxHp}`);
+    }
+  }
+
+  function drawHiddenObjects(hidden) {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (const fireball of hidden.fireballs) {
+      const gradient = ctx.createRadialGradient(fireball.x, fireball.y, 4, fireball.x, fireball.y, 34);
+      gradient.addColorStop(0, "rgba(255, 248, 160, .98)");
+      gradient.addColorStop(0.45, "rgba(255, 116, 28, .92)");
+      gradient.addColorStop(1, "rgba(255, 40, 16, .12)");
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(fireball.x, fireball.y, 32, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255, 230, 130, .76)";
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.arc(fireball.x, fireball.y, 18 + Math.sin(fireball.spin) * 4, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    for (const enemy of hidden.tengu) {
+      drawHiddenCell(1, enemy.x, enemy.y, 150, 124, enemy.vx < 0);
+    }
+    for (const scroll of hidden.scrolls) {
+      drawHiddenCell(scroll.landed ? 2 : 3, scroll.x, scroll.y, scroll.landed ? 156 : 138, scroll.landed ? 94 : 100, false);
+      if (scroll.landed) drawSparkle(scroll.x, scroll.y - 48, "#ffd878");
+    }
+  }
+
+  function drawHiddenPlayer(hidden) {
+    const player = hidden.player;
+    ctx.save();
+    if (player.invul > 0) ctx.globalAlpha = 0.55 + Math.sin(performance.now() / 45) * 0.25;
+    if (player.climbing) drawClimbingPlayerAt(player.x, player.y - 59, 118);
+    else drawPlayerAt(player.x, player.y - 52, 104, state.dir === "left" ? "left" : "right");
+    ctx.restore();
+    if (player.slash > 0) {
+      const progress = 1 - clamp(player.slash / 0.28, 0, 1);
+      drawRunnerSlashFx(player.x + (state.dir === "left" ? -88 : 88), player.y - 58, 0.58, state.dir === "left", progress);
+    }
+  }
+
+  function drawClimbingPlayerAt(x, y, size) {
+    const image = assets.ninjaClimb;
+    if (!image || !image.width || !image.height) return drawPlayerAt(x, y, size, "up");
+    const frame = Math.floor(state.frame) % 4;
+    const sw = image.width / 4;
+    const sh = image.height;
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,.38)";
+    ctx.shadowBlur = 10;
+    ctx.drawImage(image, frame * sw, 0, sw, sh, x - size / 2, y - size / 2, size, size);
+    ctx.restore();
+  }
+
+  function drawHiddenHud(hidden) {
+    ctx.save();
+    ctx.fillStyle = "rgba(8, 12, 10, .76)";
+    roundRect(18, 76, 650, 62, 8);
+    ctx.fill();
+    ctx.fillStyle = "#fff1bd";
+    ctx.font = "800 26px Microsoft JhengHei, sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText(`天狗階梯  HP ${hidden.hp}/${hidden.maxHp}  書卷 ${hidden.correct}/${hidden.required}`, 36, 112);
+    ctx.fillStyle = "rgba(8, 12, 10, .72)";
+    roundRect(480, 154, 620, 48, 8);
+    ctx.fill();
+    ctx.fillStyle = "#fff4ce";
+    ctx.textAlign = "center";
+    ctx.fillText(hidden.message, 790, 188);
+    ctx.restore();
+  }
+
+  function drawHiddenCell(cellIndex, x, y, width, height, flipX = false) {
+    const image = assets.hiddenSheet;
+    if (!image || !image.width || !image.height) return;
+    const cols = 2;
+    const rows = 2;
+    const sw = image.width / cols;
+    const sh = image.height / rows;
+    const sx = (cellIndex % cols) * sw;
+    const sy = Math.floor(cellIndex / cols) * sh;
+    ctx.save();
+    ctx.translate(x, y);
+    if (flipX) ctx.scale(-1, 1);
+    ctx.drawImage(image, sx, sy, sw, sh, -width / 2, -height / 2, width, height);
+    ctx.restore();
+  }
+
   function drawProp(name, x, y, scale) {
     const cell = MAP_DATA.propCells[name];
     const sw = assets.props.width / 4;
@@ -1691,12 +2400,18 @@
   }
 
   function updateHud() {
+    if (state.place === "hidden" && state.hidden) {
+      hudArea.textContent = "天狗階梯";
+      statusText.textContent = `書卷 ${state.hidden.correct}/${state.hidden.required} | HP ${state.hidden.hp}/${state.hidden.maxHp}`;
+      return;
+    }
     hudArea.textContent = state.place === "room" ? state.currentRoom.name : nearestGate()?.name || "卷之村";
     statusText.textContent = `語印 ${state.marks.size}/18 | HP ${state.hp}/${state.maxHp} | 解鎖 ${state.cleared.size}/6`;
   }
 
   function currentHint() {
     if (state.mode === "intro") return "";
+    if (state.place === "hidden") return "左右移動；站在樓梯按上下爬層；A 揮刀。";
     if (state.place === "hub") {
       const gate = nearestGate();
       if (!gate) return "靠近門戶按 A 進入關卡";
@@ -1725,6 +2440,7 @@
 
   function interact() {
     if (state.mode === "battle") return battleAction();
+    if (state.mode === "hidden") return hiddenSlash();
     if (state.mode === "intro") return;
     if (state.mode === "map") {
       const gate = nearestGate();
@@ -1871,6 +2587,7 @@
   }
 
   function answerQuestion(choice) {
+    if (state.mode === "hiddenQuestion") return answerHiddenQuestion(choice);
     const ok = choice === state.pending.answer;
     if (!ok) {
       playSound("wrong", 0.9);
@@ -1906,12 +2623,15 @@
     const bossDefeated = progress.boss >= state.currentRoom.bossQuestions;
     if (bossDefeated && !state.cleared.has(state.currentGate.id)) {
       state.cleared.add(state.currentGate.id);
-      if (state.currentGate.id === "boss") state.gameComplete = true;
+      const finalClear = state.currentGate.id === "boss";
+      if (finalClear) {
+        state.gameComplete = true;
+        playFinalCheer();
+      }
       showSummary(
-        state.currentGate.id === "boss" ? "成語魔卷已封印" : `${state.currentRoom.bossName} 已擊敗`,
-        state.currentGate.id === "boss"
-          ? `完成全部關卡，語印 ${state.marks.size}/18。`
-          : `取得「${state.currentRoom.reward}」。下一個關卡已解鎖。`
+        finalClear ? "修行成功" : `${state.currentRoom.bossName} 已擊敗`,
+        finalClear ? `全部關卡通過，語印 ${state.marks.size}/18。` : `取得「${state.currentRoom.reward}」。下一個關卡已解鎖。`,
+        finalClear
       );
       return;
     }
@@ -1924,22 +2644,32 @@
     flashDialogue(ready ? "寶物題完成，現在可以挑戰 BOSS。" : "答對了，再找下一個寶物題。", "繼續探索");
   }
 
-  function showSummary(title, text) {
+  function showSummary(title, text, celebration = false) {
     state.mode = "summary";
     summaryTitle.textContent = title;
     summaryText.textContent = text;
-    summaryButton.textContent = "返回地圖";
+    summaryButton.textContent = celebration ? "回到村落" : "返回地圖";
+    summaryPanel.classList.toggle("celebration", celebration);
     summaryPanel.classList.remove("hidden");
   }
 
   function closeSummary() {
     summaryPanel.classList.add("hidden");
+    summaryPanel.classList.remove("celebration");
+    summaryPanel.classList.remove("hidden-victory");
+    if (state.gameComplete && !state.hiddenPrompted && !state.hiddenCleared) {
+      returnToHub("全部修行完成，隱藏關卡已出現。");
+      showHiddenPrompt();
+      return;
+    }
     returnToHub(state.gameComplete ? "全部修行完成，可以重新進入各關複習。" : "回到村落，下一個門戶已開啟。");
   }
 
   function returnToHub(message) {
     questionPanel.classList.add("hidden");
     summaryPanel.classList.add("hidden");
+    summaryPanel.classList.remove("hidden-victory");
+    hiddenPrompt.classList.add("hidden");
     state.place = "hub";
     state.mode = "map";
     const gate = state.currentGate;
@@ -1950,6 +2680,48 @@
     state.currentObject = null;
     updateHud();
     flashDialogue(message, "知道了");
+  }
+
+  function showHiddenPrompt() {
+    state.hiddenPrompted = true;
+    dialogue.classList.add("hidden");
+    questionPanel.classList.add("hidden");
+    summaryPanel.classList.add("hidden");
+    hiddenPrompt.classList.remove("hidden");
+  }
+
+  function hideHiddenPrompt() {
+    hiddenPrompt.classList.add("hidden");
+    state.mode = "map";
+    state.place = "hub";
+    flashDialogue("可以在村落繼續複習，之後也能再加入隱藏挑戰。", "知道了");
+  }
+
+  function startHiddenStage() {
+    hiddenPrompt.classList.add("hidden");
+    questionPanel.classList.add("hidden");
+    summaryPanel.classList.add("hidden");
+    dialogue.classList.add("hidden");
+    stopRoomLoops();
+    playSound("door", 0.86);
+    state.place = "hidden";
+    state.mode = "hidden";
+    state.currentGate = null;
+    state.currentRoom = null;
+    state.currentObject = null;
+    state.hidden = createHiddenStage();
+    state.hidden.failed = true; // 規則說明顯示期間先暫停關卡
+    updateBackgroundMusic();
+    updateHud();
+    flashDialogue(
+      "天狗階梯修行規則：書卷會落在你所在的樓層，靠近按 A 揮刀開卷答題；答對 5 題解開頂層封印，答錯會扣血。小心大天狗的火球與小天狗，被打中扣血（揮刀可斬退小天狗），HP 歸零就得從起點重來。用梯子與轉角石階上下樓層，集滿書卷後登上頂層，靠近大天狗揮刀決戰！",
+      "開始挑戰",
+      () => {
+        state.hidden = createHiddenStage();
+        state.mode = "hidden";
+        state.place = "hidden";
+      }
+    );
   }
 
   function saveGame() {
@@ -2060,6 +2832,7 @@
       marks: [...state.marks],
       cleared: [...state.cleared],
       completedObjects: [...state.completedObjects],
+      ambushGates: [...state.ambushGates],
       roomProgress: Object.fromEntries(
         Object.entries(state.roomProgress).map(([room, progress]) => [
           room,
@@ -2068,6 +2841,8 @@
       ),
       deck: state.deck.filter((index) => IDIOMS[index]),
       gameComplete: state.gameComplete,
+      hiddenPrompted: state.hiddenPrompted,
+      hiddenCleared: state.hiddenCleared,
       runner: state.runner
         ? { jade: state.runner.jade || 0, training: state.runner.training || 0, bossVisible: !!state.runner.bossVisible }
         : null
@@ -2092,9 +2867,13 @@
       state.marks = new Set(Array.isArray(save.marks) ? save.marks : []);
       state.cleared = new Set(Array.isArray(save.cleared) ? save.cleared : []);
       state.completedObjects = new Set(Array.isArray(save.completedObjects) ? save.completedObjects : []);
+      state.ambushGates = createAmbushGates(save.ambushGates);
       state.roomProgress = mergeRoomProgress(save.roomProgress);
       state.deck = Array.isArray(save.deck) && save.deck.length ? save.deck.filter((index) => IDIOMS[index]) : shuffle([...IDIOMS.keys()]);
       state.gameComplete = !!save.gameComplete;
+      state.hiddenPrompted = !!save.hiddenPrompted;
+      state.hiddenCleared = !!save.hiddenCleared;
+      state.hidden = null;
       state.currentObject = null;
       state.pending = null;
       state.battle = null;
@@ -2121,6 +2900,7 @@
 
       questionPanel.classList.add("hidden");
       summaryPanel.classList.add("hidden");
+      hiddenPrompt.classList.add("hidden");
       updateHud();
       return true;
     } catch (error) {
@@ -2155,6 +2935,7 @@
 
   function handleBack() {
     if (state.mode === "question") return;
+    if (state.place === "hidden") return returnToHub("已離開隱藏關，可以之後再挑戰。");
     if (state.place === "room") returnToHub("已離開關卡，已答對的進度會保留。");
   }
 
@@ -2191,14 +2972,18 @@
       dialogue.classList.add("hidden");
       const closeHandler = dialogueOnClose;
       dialogueOnClose = null;
-      if (state.mode !== "summary" && state.mode !== "question" && state.mode !== "battle") {
-        state.mode = state.place === "hub" ? "map" : "room";
+      if (state.mode !== "summary" && state.mode !== "question" && state.mode !== "battle" && state.mode !== "hiddenQuestion") {
+        state.mode = state.place === "hub" ? "map" : state.place === "hidden" ? "hidden" : "room";
       }
       if (closeHandler) closeHandler();
     };
   }
 
   function showMission() {
+    if (state.gameComplete && !state.hiddenCleared && state.place === "hub") {
+      showHiddenPrompt();
+      return;
+    }
     const next = MAP_DATA.exits.find((gate) => !state.cleared.has(gate.id));
     flashDialogue(`目前語印 ${state.marks.size}/18，已解鎖 ${state.cleared.size}/6。下一個目標：${next ? next.name : "全部完成"}。A 是互動或挑戰；B 在房間中會回到村落。`);
   }
@@ -2285,8 +3070,24 @@
     return copy;
   }
 
+  function createAmbushGates(savedIds = null) {
+    const ids = MAP_DATA.exits.map((gate) => gate.id);
+    if (Array.isArray(savedIds)) {
+      const restored = savedIds.filter((id) => ids.includes(id));
+      if (restored.length >= Math.ceil(ids.length / 2)) return new Set(restored);
+    }
+    const count = Math.ceil(ids.length / 2) + (Math.random() < 0.35 ? 1 : 0);
+    return new Set(shuffle(ids).slice(0, Math.min(ids.length, count)));
+  }
+
   function distance(ax, ay, bx, by) {
     return Math.hypot(ax - bx, ay - by);
+  }
+
+  function rotateVector(x, y, angle) {
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    return { x: x * cos - y * sin, y: x * sin + y * cos };
   }
 
   function clamp(value, min, max) {
